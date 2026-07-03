@@ -64,12 +64,43 @@ io.on('connection', (socket) => {
     socket.sessionId = sessionId;
     socket.isTracker = true;
 
-    const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
     socket.emit('session-created', {
       sessionId,
       shareLink: `/track/${sessionId}`
     });
     console.log(`Tracking session created: ${sessionId}`);
+  });
+
+  // Tracker re-joins after reconnect (server restart / network drop)
+  socket.on('rejoin-tracking', (data) => {
+    const sessionId = data.sessionId;
+    let session = sessions.get(sessionId);
+    
+    if (!session) {
+      // Server was restarted — recreate the session
+      session = {
+        id: sessionId,
+        trackerId: socket.id,
+        isActive: true,
+        locations: [],
+        startedAt: Date.now(),
+        lastUpdate: Date.now(),
+        viewers: new Set()
+      };
+      sessions.set(sessionId, session);
+      console.log(`Session ${sessionId} re-created after server restart`);
+    } else {
+      // Session exists — just update the tracker socket ID
+      session.trackerId = socket.id;
+      session.isActive = true;
+    }
+
+    socket.join(`session-${sessionId}`);
+    socket.sessionId = sessionId;
+    socket.isTracker = true;
+
+    socket.emit('rejoin-confirmed', { sessionId });
+    console.log(`Tracker rejoined session: ${sessionId}`);
   });
 
   // Tracker sends location update
