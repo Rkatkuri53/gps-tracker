@@ -43,6 +43,55 @@ app.get('/api/session/:sessionId', (req, res) => {
   });
 });
 
+app.use(express.json());
+
+// API: Receive location update from HTTP Tracker
+app.post('/api/location', (req, res) => {
+  const { sessionId, latitude, longitude, accuracy, speed, heading, altitude, timestamp } = req.body;
+  if (!sessionId || latitude == null || longitude == null) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  let session = sessions.get(sessionId);
+  if (!session) {
+    session = {
+      id: sessionId,
+      trackerId: 'http-tracker',
+      isActive: true,
+      locations: [],
+      startedAt: Date.now(),
+      lastUpdate: Date.now(),
+      viewers: new Set()
+    };
+    sessions.set(sessionId, session);
+    console.log(`Created new HTTP session: ${sessionId}`);
+  }
+
+  session.isActive = true;
+
+  const locationPoint = {
+    latitude,
+    longitude,
+    accuracy,
+    speed,
+    heading,
+    altitude,
+    timestamp: timestamp || Date.now()
+  };
+
+  session.locations.push(locationPoint);
+  session.lastUpdate = Date.now();
+
+  if (session.locations.length > 1000) {
+    session.locations = session.locations.slice(-1000);
+  }
+
+  // Broadcast to socket viewers
+  io.to(`session-${sessionId}`).emit('location-update', locationPoint);
+
+  res.json({ success: true, viewers: session.viewers.size });
+});
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
