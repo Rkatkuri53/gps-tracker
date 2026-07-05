@@ -87,4 +87,7 @@ dependencies {
   
   // Google Play Services for Location
   implementation("com.google.android.gms:play-services-location:21.3.0")
+  
+  // OkHttp for reliable HTTP requests
+  implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

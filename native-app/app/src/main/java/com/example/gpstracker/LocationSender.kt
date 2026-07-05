@@ -8,24 +8,25 @@ import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
+import java.util.concurrent.TimeUnit
 
 object LocationSender {
     private const val TAG = "LocationSender"
+    
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
 
     fun sendLocation(context: Context, sessionId: String, lat: Double, lng: Double, accuracy: Float, speed: Float) {
         GlobalScope.launch(Dispatchers.IO) {
             try {
-                val url = URL("https://gps-tracker-htzc.onrender.com/api/location")
-                val connection = url.openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                connection.setRequestProperty("Accept", "application/json")
-                connection.doOutput = true
-
                 val json = JSONObject().apply {
                     put("sessionId", sessionId)
                     put("latitude", lat)
@@ -34,22 +35,28 @@ object LocationSender {
                     put("speed", speed)
                 }
 
-                OutputStreamWriter(connection.outputStream).use { it.write(json.toString()) }
+                val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                 
-                val responseCode = connection.responseCode
-                Log.d(TAG, "Sent HTTP location update. Response: $responseCode")
-                
-                if (responseCode == 200) {
-                    Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(context, "Location Sent! ($responseCode)", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(context, "Server Error: $responseCode", Toast.LENGTH_LONG).show()
+                val request = Request.Builder()
+                    .url("https://gps-tracker-htzc.onrender.com/api/location")
+                    .post(body)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    val responseCode = response.code
+                    val responseBody = response.body?.string() ?: ""
+                    Log.d(TAG, "Sent HTTP location update. Response: $responseCode - $responseBody")
+                    
+                    if (response.isSuccessful) {
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(context, "Location Sent! ($responseCode)", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(context, "Server Error: $responseCode", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
-                
-                connection.disconnect()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send HTTP location", e)
                 Handler(Looper.getMainLooper()).post {
