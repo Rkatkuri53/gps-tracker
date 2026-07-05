@@ -181,10 +181,20 @@ io.on('connection', (socket) => {
 
   // Viewer joins a session
   socket.on('join-session', (data) => {
-    const session = sessions.get(data.sessionId);
+    let session = sessions.get(data.sessionId);
     if (!session) {
-      socket.emit('error', { message: 'Session not found. The tracking link may have expired.' });
-      return;
+      // Session doesn't exist yet (tracker hasn't got GPS lock). 
+      // Create a pending session so the viewer can wait.
+      session = {
+        id: data.sessionId,
+        trackerId: 'pending',
+        isActive: true,
+        locations: [],
+        startedAt: Date.now(),
+        lastUpdate: Date.now(),
+        viewers: new Set()
+      };
+      sessions.set(data.sessionId, session);
     }
 
     socket.join(`session-${data.sessionId}`);
