@@ -12,6 +12,7 @@ let sessionId = null;
 let autoFollow = true;
 let totalDistance = 0;
 let lastPosition = null;
+let prevMarker = null;
 let startedAt = null;
 let durationInterval = null;
 
@@ -176,6 +177,27 @@ function initSocket() {
 // ============================================
 
 function updateMarker(lat, lng, heading) {
+  // Update Previous Marker
+  if (marker) {
+    if (!prevMarker) {
+      const prevHtml = `
+        <div class="tracker-marker viewer-marker" style="opacity: 0.7;">
+          <div class="marker-dot" style="background: #ff9f43; width: 14px; height: 14px;"></div>
+        </div>
+      `;
+      const prevIcon = L.divIcon({
+        html: prevHtml,
+        className: 'custom-marker',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
+      });
+      prevMarker = L.marker(marker.getLatLng(), { icon: prevIcon }).addTo(map);
+    } else {
+      prevMarker.setLatLng(marker.getLatLng());
+    }
+  }
+
+  // Update Current Marker
   if (!marker) {
     const markerHtml = `
       <div class="tracker-marker viewer-marker">
