@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Live Tracking</title>
+  <link rel="stylesheet" href="leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a1a;
+      color: #fff;
+    }
+    #map {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      background: #0a0a1a;
+    }
+    #status-bar {
+      position: fixed;
+      top: 12px; left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      background: rgba(20, 20, 45, 0.9);
+      backdrop-filter: blur(20px);
+      border-radius: 50px;
+      padding: 8px 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      border: 1px solid rgba(108, 92, 231, 0.3);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #fdcb6e;
+      animation: pulse 1.5s infinite;
+    }
+    .status-dot.active { background: #00b894; }
+    .status-dot.error { background: #e17055; animation: none; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    #info-panel {
+      position: fixed;
+      bottom: 20px; left: 12px; right: 12px;
+      z-index: 1000;
+      background: rgba(20, 20, 45, 0.9);
+      backdrop-filter: blur(20px);
+      border-radius: 16px;
+      padding: 16px;
+      display: flex;
+      justify-content: space-around;
+      border: 1px solid rgba(108, 92, 231, 0.2);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    .stat { text-align: center; }
+    .stat-value { font-size: 20px; font-weight: 700; color: #fff; }
+    .stat-label { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 2px; }
+    .tracker-marker {
+      width: 18px; height: 18px;
+      position: relative;
+    }
+    .marker-dot {
+      width: 14px; height: 14px;
+      background: #6c5ce7;
+      border: 3px solid #fff;
+      border-radius: 50%;
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      box-shadow: 0 0 10px rgba(108,92,231,0.6);
+      z-index: 2;
+    }
+    .marker-pulse {
+      width: 40px; height: 40px;
+      background: rgba(108, 92, 231, 0.25);
+      border-radius: 50%;
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      animation: marker-pulse 2s infinite;
+    }
+    @keyframes marker-pulse {
+      0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
+      100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
+    }
+    .leaflet-control-zoom { border: none !important; }
+    .leaflet-control-zoom a {
+      background: rgba(20,20,45,0.85) !important;
+      color: #fff !important;
+      border: 1px solid rgba(255,255,255,0.1) !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="status-bar">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+
+  <div id="map"></div>
+
+  <div id="info-panel">
+    <div class="stat">
+      <div class="stat-value" id="speedValue">0.0</div>
+      <div class="stat-label">km/h</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="distanceValue">0.00</div>
+      <div class="stat-label">km</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="durationValue">00:00</div>
+      <div class="stat-label">duration</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="lastUpdateValue">--</div>
+      <div class="stat-label">last update</div>
+    </div>
+  </div>
+
+  <script src="leaflet.js"></script>
+  <script src="socket.io.min.js"></script>
+  <script>
+    // Extract session ID from Android bridge
+    let sessionId = null;
+    if (window.AndroidBridge && typeof window.AndroidBridge.getSessionId === 'function') {
+      sessionId = window.AndroidBridge.getSessionId();
+    }
+
+    let map, marker, trail, socket;
+    let trailCoords = [];
+    let totalDistance = 0;
+    let lastPosition = null;
+    let startedAt = null;
+    let autoFollow = true;
+    let durationInterval = null;
+
+    // Global error handler to display JS errors on screen
+    window.onerror = function(message, source, lineno, colno, error) {
+      updateStatus('error', 'JS Error: ' + message);
+      return false;
+    };
+
+    // Initialize map
+    function initMap() {
+      try {
+        if (typeof L === 'undefined') {
+          updateStatus('error', 'Map library failed to load');
+          return;
+        }
+
+        map = L.map('map', {
+          center: [20, 78], // Center on India
+          zoom: 5,
+          zoomControl: true,
+          attributionControl: false
+        });
+
+        // Use standard OSM tiles which are extremely reliable
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // Force recalculate map size after tiles load
+        setTimeout(function() { map.invalidateSize(); }, 500);
+        setTimeout(function() { map.invalidateSize(); }, 1500);
+      } catch (e) {
+        updateStatus('error', 'Map Error: ' + e.message);
+      }
+    }
+
+    // Connect to server
+    function initSocket() {
+      var serverUrl = 'https://gps-tracker-htzc.onrender.com';
+      socket = io(serverUrl, {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000
+      });
+
+      socket.on('connect', function() {
+        updateStatus('connecting', 'Joining session...');
+        socket.emit('join-session', { sessionId: sessionId });
+      });
+
+      socket.on('disconnect', function() {
+        updateStatus('error', 'Disconnected — reconnecting...');
+      });
+
+      socket.on('connect_error', function() {
+        updateStatus('error', 'Connection failed — retrying...');
+      });
+
+      socket.on('session-data', function(data) {
+        startedAt = data.startedAt;
+
+        if (!data.isActive) {
+          updateStatus('error', 'Tracking has ended');
+          return;
+        }
+
+        updateStatus('active', 'Tracking live');
+
+        if (data.locations && data.locations.length > 0) {
+          data.locations.forEach(function(loc, index) {
+            trailCoords.push([loc.latitude, loc.longitude]);
+            if (index > 0) {
+              var prev = data.locations[index - 1];
+              totalDistance += calculateDistance(prev.latitude, prev.longitude, loc.latitude, loc.longitude);
+            }
+          });
+          updateTrail();
+          var lastLoc = data.locations[data.locations.length - 1];
+          updateMarker(lastLoc.latitude, lastLoc.longitude);
+          updateStatsDisplay(lastLoc.speed, lastLoc.timestamp);
+          map.setView([lastLoc.latitude, lastLoc.longitude], 16, { animate: true });
+        } else {
+          // If no locations yet, tell the user we are waiting for GPS
+          updateStatus('connecting', 'Waiting for GPS signal...');
+        }
+
+        durationInterval = setInterval(updateDuration, 1000);
+      });
+
+      socket.on('location-update', function(data) {
+        var lat = data.latitude;
+        var lng = data.longitude;
+
+        if (lastPosition) {
+          var dist = calculateDistance(lastPosition.lat, lastPosition.lng, lat, lng);
+          if (dist > 0.001) totalDistance += dist;
+        }
+        lastPosition = { lat: lat, lng: lng };
+
+        updateMarker(lat, lng);
+        trailCoords.push([lat, lng]);
+        updateTrail();
+        updateStatsDisplay(data.speed, data.timestamp);
+
+        if (autoFollow) {
+          map.panTo([lat, lng], { animate: true, duration: 0.5 });
+        }
+      });
+
+      socket.on('tracking-stopped', function() {
+        updateStatus('error', 'Tracking ended');
+        if (durationInterval) clearInterval(durationInterval);
+      });
+
+      socket.on('error', function(data) {
+        updateStatus('error', data.message || 'Session not found');
+      });
+    }
+
+    function updateMarker(lat, lng) {
+      if (!marker) {
+        var icon = L.divIcon({
+          html: '<div class="tracker-marker"><div class="marker-pulse"></div><div class="marker-dot"></div></div>',
+          className: '',
+          iconSize: [18, 18],
+          iconAnchor: [9, 9]
+        });
+        marker = L.marker([lat, lng], { icon: icon }).addTo(map);
+      } else {
+        marker.setLatLng([lat, lng]);
+      }
+    }
+
+    function updateTrail() {
+      if (trail) {
+        trail.setLatLngs(trailCoords);
+      } else {
+        trail = L.polyline(trailCoords, {
+          color: '#00cec9',
+          weight: 4,
+          opacity: 0.7,
+          smoothFactor: 1
+        }).addTo(map);
+      }
+    }
+
+    function updateStatsDisplay(speed, timestamp) {
+      var speedKmh = speed ? (speed * 3.6).toFixed(1) : '0.0';
+      document.getElementById('speedValue').textContent = speedKmh;
+      document.getElementById('distanceValue').textContent = totalDistance.toFixed(2);
+      if (timestamp) {
+        var ago = Math.floor((Date.now() - timestamp) / 1000);
+        document.getElementById('lastUpdateValue').textContent = ago < 5 ? 'now' : ago + 's ago';
+      }
+    }
+
+    function updateDuration() {
+      if (!startedAt) return;
+      var elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      var h = Math.floor(elapsed / 3600);
+      var m = Math.floor((elapsed % 3600) / 60);
+      var s = elapsed % 60;
+      var display = h > 0
+        ? h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0')
+        : String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+      document.getElementById('durationValue').textContent = display;
+    }
+
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+      var R = 6371;
+      var dLat = (lat2 - lat1) * Math.PI / 180;
+      var dLon = (lon2 - lon1) * Math.PI / 180;
+      var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    function updateStatus(type, text) {
+      var dot = document.getElementById('statusDot');
+      dot.className = 'status-dot';
+      if (type === 'active') dot.classList.add('active');
+      else if (type === 'error') dot.classList.add('error');
+      document.getElementById('statusText').textContent = text;
+    }
+
+    // Start everything
+    initMap();
+    if (sessionId) {
+      initSocket();
+    } else {
+      updateStatus('error', 'No session ID provided');
+    }
+  </script>
+</body>
+</html>

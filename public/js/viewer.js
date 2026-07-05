@@ -38,21 +38,17 @@ function init() {
 
 function initMap() {
   map = L.map('map', {
-    center: [20, 0],
-    zoom: 3,
+    center: [20, 78],
+    zoom: 5,
     zoomControl: true,
     attributionControl: true
   });
 
-  // Dark-styled map tiles
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 20
+  // Standard OSM tiles — most reliable, no CDN dependency
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap',
+    maxZoom: 19
   }).addTo(map);
-
-  // Remove default tile filter since we're using dark tiles
-  document.querySelector('.leaflet-tile-pane').style.filter = 'none';
 
   // Detect manual pan to disable auto-follow
   map.on('dragstart', () => {
