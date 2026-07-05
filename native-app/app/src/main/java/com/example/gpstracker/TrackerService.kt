@@ -74,7 +74,6 @@ class TrackerService : Service() {
             val lastNet = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
             if (lastNet != null && persistentId != null) {
                 LocationSender.sendLocation(this, persistentId!!, lastNet.latitude, lastNet.longitude, lastNet.accuracy, lastNet.speed)
-                Toast.makeText(this, "Sent initial location!", Toast.LENGTH_SHORT).show()
             }
 
             // Register for guaranteed location updates every 30 seconds

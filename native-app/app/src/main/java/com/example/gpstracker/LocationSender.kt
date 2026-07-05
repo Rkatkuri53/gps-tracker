@@ -46,22 +46,9 @@ object LocationSender {
                     val responseCode = response.code
                     val responseBody = response.body?.string() ?: ""
                     Log.d(TAG, "Sent HTTP location update. Response: $responseCode - $responseBody")
-                    
-                    if (response.isSuccessful) {
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(context, "Location Sent! ($responseCode)", Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(context, "Server Error: $responseCode", Toast.LENGTH_LONG).show()
-                        }
-                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send HTTP location", e)
-                Handler(Looper.getMainLooper()).post {
-                    Toast.makeText(context, "Network Error: ${e.message}", Toast.LENGTH_LONG).show()
-                }
             }
         }
     }
