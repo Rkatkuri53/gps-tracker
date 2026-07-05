@@ -6,36 +6,54 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
-import android.os.Handler
+import android.os.Bundle
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import com.google.android.gms.location.*
 
 class TrackerService : Service() {
-    private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private lateinit var locationCallback: LocationCallback
-    private val handler = Handler(Looper.getMainLooper())
+    private lateinit var locationManager: LocationManager
+    private var persistentId: String? = null
+
+    private val locationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            if (persistentId == null) return
+            Log.d("TrackerService", "Location fetched: ${location.latitude}, ${location.longitude}")
+            
+            // Save coordinates for the UI to display
+            val prefs = getSharedPreferences("GPS_PREFS", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("LAST_LAT", location.latitude.toString())
+                .putString("LAST_LNG", location.longitude.toString())
+                .putString("LAST_TIME", java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date()))
+                .apply()
+                
+            LocationSender.sendLocation(
+                context = this@TrackerService,
+                sessionId = persistentId!!,
+                lat = location.latitude,
+                lng = location.longitude,
+                accuracy = location.accuracy,
+                speed = location.speed
+            )
+        }
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        override fun onProviderEnabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) {}
+    }
 
     override fun onCreate() {
         super.onCreate()
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
-        locationCallback = object : LocationCallback() {
-            override fun onLocationResult(locationResult: LocationResult) {
-                for (location in locationResult.locations) {
-                    Log.d("TrackerService", "Location: ${location.latitude}, ${location.longitude}")
-                    SocketClient.sendLocation(
-                        lat = location.latitude,
-                        lng = location.longitude,
-                        accuracy = location.accuracy,
-                        speed = location.speed // Send raw m/s — viewer converts to km/h
-                    )
-                }
-            }
-        }
+        val prefs = getSharedPreferences("GPS_PREFS", Context.MODE_PRIVATE)
+        persistentId = prefs.getString("PERSISTENT_ID", null)
     }
 
     @SuppressLint("MissingPermission")
@@ -43,47 +61,48 @@ class TrackerService : Service() {
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, "TrackerChannel")
             .setContentTitle("GPS Tracker Active")
-            .setContentText("Sharing location in background...")
+            .setContentText("Continuous tracking enabled (Network + GPS)")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
         startForeground(1, notification)
+        Toast.makeText(this, "Live Tracking Started", Toast.LENGTH_SHORT).show()
 
-        // Phase 1: FAST TRACKING (Every 2 seconds) to get immediate location
-        val fastRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2000)
-            .setMinUpdateIntervalMillis(1000)
-            .build()
+        try {
+            // Instantly try to send last known Network location
+            val lastNet = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (lastNet != null && persistentId != null) {
+                LocationSender.sendLocation(this, persistentId!!, lastNet.latitude, lastNet.longitude, lastNet.accuracy, lastNet.speed)
+                Toast.makeText(this, "Sent initial location!", Toast.LENGTH_SHORT).show()
+            }
 
-        fusedLocationClient.requestLocationUpdates(
-            fastRequest,
-            locationCallback,
-            Looper.getMainLooper()
-        )
-
-        // Phase 2: SLOW TRACKING (Every 60 seconds) after 10 seconds has passed
-        handler.postDelayed({
-            fusedLocationClient.removeLocationUpdates(locationCallback)
-            
-            val slowRequest = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 60000)
-                .setMinUpdateIntervalMillis(60000)
-                .build()
-
-            fusedLocationClient.requestLocationUpdates(
-                slowRequest,
-                locationCallback,
+            // Register for guaranteed location updates every 30 seconds
+            locationManager.requestLocationUpdates(
+                LocationManager.NETWORK_PROVIDER,
+                30000L,
+                0f,
+                locationListener,
                 Looper.getMainLooper()
             )
-            Log.d("TrackerService", "Switched to 60-second battery saving mode")
-        }, 10000)
+            locationManager.requestLocationUpdates(
+                LocationManager.GPS_PROVIDER,
+                30000L,
+                0f,
+                locationListener,
+                Looper.getMainLooper()
+            )
+            Log.d("TrackerService", "Registered Network and GPS providers for 30s updates")
+        } catch (e: Exception) {
+            Log.e("TrackerService", "Failed to start location updates", e)
+        }
 
         return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        fusedLocationClient.removeLocationUpdates(locationCallback)
-        handler.removeCallbacksAndMessages(null)
+        locationManager.removeUpdates(locationListener)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

