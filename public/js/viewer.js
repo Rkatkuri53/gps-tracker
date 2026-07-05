@@ -45,9 +45,9 @@ function initMap() {
     attributionControl: true
   });
 
-  // Standard OSM tiles — most reliable, no CDN dependency
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap',
+  // CartoDB Voyager tiles — highly reliable for WebViews, no strict user-agent blocking
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
     maxZoom: 19
   }).addTo(map);
 
