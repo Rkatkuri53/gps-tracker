@@ -268,7 +268,6 @@ fun ViewerScreen(sessionId: String, onBack: () -> Unit) {
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT
                     )
-                    setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
                     setBackgroundColor(android.graphics.Color.parseColor("#0a0a1a"))
 
                     settings.apply {

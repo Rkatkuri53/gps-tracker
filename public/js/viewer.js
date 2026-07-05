@@ -110,7 +110,7 @@ function initSocket() {
       const lastLoc = data.locations[data.locations.length - 1];
       updateMarker(lastLoc.latitude, lastLoc.longitude, lastLoc.heading);
       updateStatsDisplay(lastLoc.speed, lastLoc.timestamp);
-      map.setView([lastLoc.latitude, lastLoc.longitude], 16, { animate: true });
+      map.setView([lastLoc.latitude, lastLoc.longitude], 16, { animate: false });
     }
 
     // Start duration counter
@@ -145,7 +145,7 @@ function initSocket() {
 
     // Auto-follow
     if (autoFollow) {
-      map.panTo([latitude, longitude], { animate: true, duration: 0.5 });
+      map.setView([latitude, longitude], map.getZoom(), { animate: false });
     }
   });
 
@@ -275,10 +275,10 @@ function centerOnTracker() {
   autoFollow = true;
   document.getElementById('centerBtn').style.opacity = '0.7';
   if (lastPosition) {
-    map.panTo([lastPosition.lat, lastPosition.lng], { animate: true });
+    map.setView([lastPosition.lat, lastPosition.lng], 16, { animate: false });
   } else if (trailCoords.length > 0) {
     const last = trailCoords[trailCoords.length - 1];
-    map.panTo(last, { animate: true });
+    map.setView(last, 16, { animate: false });
   }
 }
 
