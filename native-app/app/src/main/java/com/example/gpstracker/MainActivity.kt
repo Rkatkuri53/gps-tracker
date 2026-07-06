@@ -28,6 +28,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.gpstracker.theme.GPSTrackerTheme
+import io.socket.client.IO
+import io.socket.client.Socket
+import org.json.JSONObject
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -241,10 +249,61 @@ fun HomeScreen(
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun ViewerScreen(sessionId: String, onBack: () -> Unit) {
     androidx.activity.compose.BackHandler { onBack() }
+    
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var liveLocation by remember { mutableStateOf<GeoPoint?>(null) }
+    var liveAccuracy by remember { mutableStateOf(0f) }
+    var viewerCount by remember { mutableStateOf(0) }
+    
+    // Initialize Socket.IO
+    DisposableEffect(sessionId) {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val socket: Socket = try {
+            IO.socket("https://gps-tracker-htzc.onrender.com")
+        } catch (e: Exception) {
+            Log.e("ViewerSocket", "Socket Error", e)
+            throw RuntimeException(e)
+        }
+        
+        socket.on(Socket.EVENT_CONNECT) {
+            Log.d("ViewerSocket", "Connected")
+            val joinData = JSONObject().put("sessionId", sessionId)
+            socket.emit("join-session", joinData)
+        }
+        
+        socket.on("session-data") { args ->
+            val data = args[0] as JSONObject
+            handler.post {
+                if (data.has("locations")) {
+                    val locations = data.getJSONArray("locations")
+                    if (locations.length() > 0) {
+                        val lastLoc = locations.getJSONObject(locations.length() - 1)
+                        liveLocation = GeoPoint(lastLoc.getDouble("latitude"), lastLoc.getDouble("longitude"))
+                        liveAccuracy = lastLoc.optDouble("accuracy", 0.0).toFloat()
+                    }
+                }
+                if (data.has("viewerCount")) viewerCount = data.getInt("viewerCount")
+            }
+        }
+        
+        socket.on("location-update") { args ->
+            val data = args[0] as JSONObject
+            handler.post {
+                liveLocation = GeoPoint(data.getDouble("latitude"), data.getDouble("longitude"))
+                liveAccuracy = data.optDouble("accuracy", 0.0).toFloat()
+            }
+        }
+        
+        socket.connect()
+        
+        onDispose {
+            socket.disconnect()
+            socket.off()
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(
@@ -257,56 +316,59 @@ fun ViewerScreen(sessionId: String, onBack: () -> Unit) {
             ) {
                 Button(onClick = onBack) { Text("\u2190 Back") }
                 Spacer(modifier = Modifier.width(12.dp))
-                Text(text = "Tracking: $sessionId", style = MaterialTheme.typography.titleMedium)
+                Column {
+                    Text(text = "Tracking: $sessionId", style = MaterialTheme.typography.titleMedium)
+                    Text(text = "Viewers: $viewerCount", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
 
         AndroidView(
-            factory = { context ->
-                WebView(context).apply {
-                    layoutParams = android.view.ViewGroup.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    setBackgroundColor(android.graphics.Color.parseColor("#0a0a1a"))
-
-                    settings.apply {
-                        javaScriptEnabled = true
-                        domStorageEnabled = true
-                        databaseEnabled = true
-                        useWideViewPort = true
-                        loadWithOverviewMode = true
-                        setSupportZoom(true)
-                        builtInZoomControls = true
-                        displayZoomControls = false
-                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36"
-                    }
-
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
-                            Log.d("ViewerWebView", "JS [${msg?.messageLevel()}] ${msg?.message()}")
-                            return true
+            factory = { ctx ->
+                // Configure OSMDroid User-Agent
+                Configuration.getInstance().userAgentValue = ctx.packageName
+                
+                MapView(ctx).apply {
+                    setTileSource(TileSourceFactory.MAPNIK)
+                    setMultiTouchControls(true)
+                    // Start zoomed out so the user doesn't see a zoomed-in ocean if GPS is delayed
+                    controller.setZoom(3.0) 
+                }
+            },
+            update = { mapView ->
+                liveLocation?.let { loc ->
+                    var marker = mapView.overlays.filterIsInstance<Marker>().firstOrNull { it.id == "live_marker" }
+                    if (marker == null) {
+                        // First time getting a location lock
+                        marker = Marker(mapView).apply {
+                            id = "live_marker"
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            title = "Live Location"
                         }
+                        mapView.overlays.add(marker)
+                        // Zoom in tightly now that we have a real location
+                        mapView.controller.setZoom(16.0) 
                     }
-                    webViewClient = object : WebViewClient() {
-                        override fun onReceivedError(
-                            view: WebView?,
-                            request: android.webkit.WebResourceRequest?,
-                            error: android.webkit.WebResourceError?
-                        ) {
-                            super.onReceivedError(view, request, error)
-                            android.widget.Toast.makeText(
-                                context, 
-                                "WebView Error: ${error?.description}", 
-                                android.widget.Toast.LENGTH_LONG
-                            ).show()
+                    
+                    marker.position = loc
+
+                    // Draw Accuracy Circle
+                    var circle = mapView.overlays.filterIsInstance<org.osmdroid.views.overlay.Polygon>().firstOrNull { it.id == "accuracy_circle" }
+                    if (circle == null) {
+                        circle = org.osmdroid.views.overlay.Polygon().apply {
+                            id = "accuracy_circle"
+                            fillColor = android.graphics.Color.argb(50, 0, 150, 255) // Semi-transparent blue
+                            strokeColor = android.graphics.Color.argb(150, 0, 150, 255)
+                            strokeWidth = 2f
                         }
+                        mapView.overlays.add(0, circle) // Add behind marker
+                    }
+                    if (liveAccuracy > 0) {
+                        circle.points = org.osmdroid.views.overlay.Polygon.pointsAsCircle(loc, liveAccuracy.toDouble())
                     }
 
-                    val serverUrl = "https://gps-tracker-htzc.onrender.com/track/$sessionId"
-                    Log.d("ViewerWebView", "Loading: $serverUrl")
-                    loadUrl(serverUrl)
+                    mapView.controller.animateTo(loc)
+                    mapView.invalidate()
                 }
             },
             modifier = Modifier.fillMaxWidth().weight(1f)

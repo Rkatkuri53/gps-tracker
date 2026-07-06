@@ -121,6 +121,9 @@ function initSocket() {
   socket.on('location-update', (data) => {
     const { latitude, longitude, speed, heading, timestamp } = data;
 
+    // Check if this is the first location ping
+    const isFirstLocation = (lastPosition === null);
+
     // Calculate distance
     if (lastPosition) {
       const dist = calculateDistance(
@@ -145,7 +148,11 @@ function initSocket() {
 
     // Auto-follow
     if (autoFollow) {
-      map.setView([latitude, longitude], map.getZoom(), { animate: false });
+      if (isFirstLocation) {
+        map.setView([latitude, longitude], 16, { animate: true });
+      } else {
+        map.setView([latitude, longitude], map.getZoom(), { animate: false });
+      }
     }
   });
 

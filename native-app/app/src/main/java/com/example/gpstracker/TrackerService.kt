@@ -25,7 +25,7 @@ class TrackerService : Service() {
             val location = locationResult.lastLocation ?: return
             if (persistentId == null) return
             
-            Log.d("TrackerService", "Location fetched: ${location.latitude}, ${location.longitude}")
+            Log.d("TrackerService", "Location fetched: ${location.latitude}, ${location.longitude} Acc: ${location.accuracy}")
             
             // Save coordinates for the UI to display
             val prefs = getSharedPreferences("GPS_PREFS", Context.MODE_PRIVATE)

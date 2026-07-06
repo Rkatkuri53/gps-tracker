@@ -90,4 +90,7 @@ dependencies {
   
   // OkHttp for reliable HTTP requests
   implementation("com.squareup.okhttp3:okhttp:4.12.0")
+  
+  // OSMDroid for native mapping
+  implementation("org.osmdroid:osmdroid-android:6.1.18")
 }
